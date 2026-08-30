@@ -1,0 +1,248 @@
+# End-to-End Research & Analysis Report
+
+**Prepared:** 31 August 2026 · **Prepared for:** Research/analysis assignment
+**Note on sourcing:** Items dated 2026 (and some late-2025 items) were gathered via live web search on the preparation date and are cited to the retrieved pages. My underlying training data does **not** reach 2026; wherever a claim depends on post-training events I flag this explicitly.
+
+---
+
+# PART 1 — Knowledge & Reasoning Baseline
+
+## Q1. Current consensus on the "hard problem of consciousness"
+
+**Short answer: there is no consensus on a solution.** The hard problem (Chalmers, 1995–96) — why there is "something it is like" to be a system at all, and why physical processing is accompanied by experience — remains open. What *has* changed is the shape of the debate: the past few years have seen (a) a large-scale empirical adjudication between two leading theories, (b) a bruising methodological controversy over one of them, and (c) a wave of experimental-psychology work arguing that the problem itself partly reflects biased human intuitions.
+
+**Main positions (no clear winner):**
+
+- **Physicalism / reductive realism** — consciousness is (or is grounded in) physical/functional processes. It is the *plurality* view among Anglophone academic philosophers but far from a consensus: the 2020 PhilPapers Survey found **51.9%** accept or lean toward physicalism about the mind, vs **32.1%** non-physicalism and **15.9%** other/undecided [1](https://conscienceandconsciousness.com/2021/11/01/materialism-remains-the-majority-view-but-only-just/). Within this camp, work on the "easy problems" (neural correlates, access) has advanced substantially even though the explanatory gap remains.
+- **Illusionism / eliminativism** (Frankish, Dennett, Kammerer) — phenomenal consciousness as ordinarily conceived does not exist; what needs explaining is why it *seems* to ("the illusion problem"). Frankish argues this replaces the hard problem with a tractable one.
+- **Dualism** — property dualism (Chalmers' "naturalistic dualism"; panprotopsychism-adjacent views) and residual substance dualism. Among non-physicalists in the PhilPapers survey, roughly three-quarters are dualists and one-quarter panpsychists [1](https://conscienceandconsciousness.com/2021/11/01/materialism-remains-the-majority-view-but-only-just/).
+- **Panpsychism** (Goff, Strawson) — consciousness is a fundamental feature of matter; faces the "combination problem" (how micro-experiences yield a unified macro-experience).
+- **Higher-order theories** (Lau, Brown, LeDoux; Cleeremans' SOMA), **attention-schema theory** (Graziano), **biological naturalism** (Searle), and **predictive-processing / recurrent-processing** accounts (Lamme; Seth's "controlled hallucination") round out the landscape.
+
+**Significant developments after 2023:**
+
+1. **The "pseudoscience" affair (Sept 2023).** An open letter signed by 124 researchers labeled Integrated Information Theory "pseudoscience," arguing its core claims are untestable in practice (Φ is computationally intractable), sparking an intense public controversy and rebuttals [2](https://www.nature.com/articles/d41586-023-02971-1). It became a proxy fight over what counts as testable science of consciousness.
+2. **The COGITATE adversarial collaboration (results in *Nature*, 2025).** A pre-registered, theory-neutral test of IIT vs Global Neuronal Workspace Theory across six labs found that *both* theories were partly supported and partly challenged — no clean winner (details in Part 2) [3](https://www.nature.com/articles/s41586-025-08888-1).
+3. **The meta-problem research program (Chalmers) and illusionism debate** continue to develop — e.g., Kammerer's "illusion meta-problem" ("why does illusionism seem so obviously wrong?") and the "resistance problem" [4](https://philarchive.org/archive/SCHPPI-15).
+4. **Psychology-of-the-problem work:** Berent (2024, *Neuroscience of Consciousness*) marshals experimental evidence that "problem intuitions" (that consciousness is non-physical) track psychological biases such as dualism and essentialism, suggesting the hard problem is partly an artifact of human psychology [5](https://academic.oup.com/nc/article/2024/1/niae016/7641203).
+5. **LLMs enter the debate (2025–26):** Anthropic's Gurnee, Sofroniew & Lindsey et al. reported a "J-space" — a privileged, verbalizable, capacity-limited subspace in Claude Sonnet 4.5 that they argue functions like a global workspace. Dehaene & Naccache (June 2026) called it "a landmark," while stressing it does **not** yet demonstrate the nonlinear "ignition" signature of conscious access and says nothing about phenomenal consciousness [6](https://unicog.org/wp_2025/wp-content/uploads/2026/07/Dehaene-and-Naccache-Workspace-commentary-on-Gurnee-Lindsey-June-2026.pdf).
+
+**Bottom line:** physicalism remains the majority position but is contested by a substantial minority; the empirical science of consciousness is maturing (adversarial collaborations, preregistration, TMS-EEG complexity measures), yet nobody claims the hard problem is solved.
+
+## Q2. Transformer KV cache: how it works, memory complexity, optimisations
+
+**Mechanism.** During autoregressive inference the model generates one token per step, and every new token must attend to *all* previous tokens. Attention needs key (**K**) and value (**V**) vectors for every past token. Without caching, each step recomputes K and V for the entire sequence — O(n²) work per step for a sequence of length n. The **KV cache** simply stores the K and V vectors computed for past tokens so that a new token only computes its own query/key/value and attends against the cached K,V. This makes each decode step O(n) in the sequence length (plus the attention dot-products).
+
+**Memory complexity.** For a model with **L** layers, **H** attention heads, head dimension **d_head = d_model/H**, a sequence of **n** tokens, and **p** bytes per parameter:
+
+`KV cache bytes = 2 (K and V) × L × H × d_head × n × p = 2 × L × d_model × n × p`
+
+It grows **linearly with n and with batch size**, and for large models it dominates GPU memory at long context. Example: L=32, d_model=4096, fp16 (p=2) ⇒ ≈ 0.5 MB per token, so a 4K-token batch/sequence ≈ 2 GB. This is the main bottleneck for long-context and high-throughput serving.
+
+**Common optimisations:**
+
+- **Multi-Query Attention (MQA):** one shared K,V head for all query heads (Shazeer 2019) — reduces the H factor to 1.
+- **Grouped-Query Attention (GQA):** a middle ground with G K,V heads (1 < G < H); used by Llama 2/3 (G=8), Gemini, and others — most of MQA's memory saving at better quality.
+- **PagedAttention (vLLM):** manages the KV cache in fixed-size "pages" like OS virtual memory, eliminating fragmentation/waste and enabling **sharing** of the cache across sequences in a batch (e.g., beam search, parallel sampling), plus seamless paging to CPU.
+- **KV-cache quantization:** storing K,V in 8-bit/4-bit precision to cut memory.
+- **Token eviction / sliding windows:** e.g., Mistral's sliding-window attention, "attention sinks" (StreamingLLM), and H2O's "Heavy-Hitter" eviction of low-importance tokens.
+- **Multi-head Latent Attention (MLA, DeepSeek-V2/V3):** compresses K and V into low-rank latent vectors, drastically shrinking the cache.
+- **FlashAttention:** reduces the memory footprint of the attention computation itself (and speeds I/O-bound attention), though it doesn't shrink the KV cache.
+- **Continuous batching / prefix caching:** reuse cached prefixes shared across requests.
+
+## Q3. India at the 2024 Paris Olympics — rank, medals, controversies
+
+- **Final rank:** **71st** in the medal table (by gold-medal-first ranking).
+- **Medal count:** **6 medals — 1 silver, 5 bronze** (no gold) [7](https://www.news18.com/sports/year-ender-2024-manu-bhaker-vinesh-phogat-neeraj-chopra-hockey-swapnil-kusale-aman-sehrawat-story-history-heartbreaks-india-paris-olympics-9167655.html).
+  - **Silver:** Neeraj Chopra (men's javelin).
+  - **Bronze:** Manu Bhaker (women's 10m air pistol — first Indian woman shooting medallist; and mixed-team 10m air pistol with Sarabjot Singh), Swapnil Kusale (men's 50m rifle 3-positions), Indian men's hockey team, Aman Sehrawat (men's 57 kg freestyle wrestling — youngest Indian Olympic medallist).
+  - 117 athletes competed; the tally fell short of Tokyo 2020's seven medals (including a gold), which framed much of the post-Games debate.
+
+**Major controversy — Vinesh Phogat disqualification.** Phogat reached the women's 50 kg wrestling final but was disqualified the morning of the gold-medal bout after weighing in **100 grams over** the 50 kg limit (a second-day weigh-in). Her appeal to the Court of Arbitration for Sport (CAS) for a shared silver was **rejected on 14 August 2024**, and she announced retirement the next day [8](https://timesofindia.indiatimes.com/sports/paris-olympics-2024/indiaparis/vinesh-phogats-appeal-against-olympic-disqualification-rejected-by-cas/articleshow/112531211.cms).
+
+**Rule-change / reform discussions that followed.** The Indian Olympic Association publicly called the weight rule's application "inhumane" and argued that "total disqualification… for such a weight infraction on the second of two days warrants a deeper examination," pressuring United World Wrestling/the IOC to re-examine weigh-in rules [8](https://timesofindia.indiatimes.com/sports/paris-olympics-2024/indiaparis/vinesh-phogats-appeal-against-olympic-disqualification-rejected-by-cas/articleshow/112531211.cms). The case also rekindled India's broader debate about sports governance, funding, and the earlier suspension of the Wrestling Federation of India.
+
+## Q4. 2025 Abel Prize
+
+**Masaki Kashiwara** (Kyoto University / RIMS) won the 2025 Abel Prize, "**for his fundamental contributions to algebraic analysis and representation theory, in particular the development of the theory of D-modules and the discovery of crystal bases**." He is the first Japanese laureate. D-modules are an algebraic framework for studying linear partial differential equations; crystal bases encode representations of quantum groups. Announced 26 March 2025 [9](https://www.ias.edu/news/past-member-masaki-kashiwara-2025-abel-prize).
+
+## Q5. 2026 Abel Prize (most recent)
+
+**Gerd Faltings** (Max Planck Institute for Mathematics, Bonn) won the **2026 Abel Prize**, announced **19 March 2026**, "**for introducing powerful tools in arithmetic geometry and resolving long-standing diophantine conjectures of Mordell and Lang**" [10](https://euromathsoc.org/news/gerd-faltings-awarded-the-2026-abel-prize-206). His 1983 proof of the **Mordell conjecture** (a curve of genus > 1 has only finitely many rational points — now "Faltings' theorem") unified geometry and number theory and helped found modern arithmetic geometry; he previously won the Fields Medal (1986). He is the first German Abel laureate; the ceremony is scheduled for 26 May 2026 in Oslo [11](https://www.newscientist.com/article/2519762-mathematician-wins-2026-abel-prize-for-solving-60-year-old-mystery/).
+
+## Q6. Major scientific/technological breakthroughs reported in H1 2026
+
+**Caveat:** my training data does not cover 2026; the following is compiled from live web sources retrieved on 31 Aug 2026 and I cannot independently vouch for every claim. The most significant *reported* items from the first half of 2026:
+
+1. **AI/computationally-designed vaccines reach humans.** Cambridge/DIOSynVax reported the **first human clinical trial of a vaccine whose active component was designed entirely by computer simulation** (June 2026), and an **AI-designed universal coronavirus vaccine passed its first human safety trial** (June 2026) [12](https://www.sciencedaily.com/), [13](https://en.wikipedia.org/wiki/2026_in_science).
+2. **Cancer immunotherapy advance.** A *Nature* study (1 July 2026) reported **GPNMB-targeted CAR-T cells** that attack both glioblastoma cells and tumour-associated macrophages, eliminating detectable tumours in preclinical models [13](https://en.wikipedia.org/wiki/2026_in_science).
+3. **First direct observation of the Migdal effect** (January 2026) — a recoiling nucleus ejecting an electron, confirming a 1939 prediction and opening new routes to light dark-matter detection [13](https://en.wikipedia.org/wiki/2026_in_science).
+4. **HPV-vaccination milestone.** A *Lancet* study (18 June 2026) estimated the HPV vaccine has prevented ~200 cervical-cancer deaths in England, with **no deaths among women aged 20–24 (2020–2024)** — the first such period on record [13](https://en.wikipedia.org/wiki/2026_in_science).
+5. **Space & astronomy infrastructure.** NASA's **Artemis II** crewed lunar flyby (first crewed mission beyond low Earth orbit since Apollo 17), the **Nancy Grace Roman Space Telescope**, full science operations of the **Vera C. Rubin Observatory**, and China's **Xuntian** telescope [14](https://www.analyticsinsight.net/amp/story/aerospace/biggest-space-science-breakthroughs-to-watch-for-2026).
+6. **Quantum technology.** Entanglement generated directly from **sunlight** (Aug 2026); IBM aiming to demonstrate **quantum advantage** on its hardware by end-2026 [15](https://pocketmags.com/us/how-it-works-magazine/issue-211/articles/incredible-science-breakthroughs-for-2026).
+7. Also reported: a **two-state model of liquid water** (June 2026); explanation of "little red dots" as young supermassive black holes in dense gas cocoons (*Nature*, Jan 2026); first **road transport of antimatter** (March 2026) [13](https://en.wikipedia.org/wiki/2026_in_science).
+
+If your priority is *robustness of sourcing*, items 1–4 (vaccines, CAR-T, HPV) are the most consequential and are backed by peer-reviewed venues (*Nature*, *The Lancet*, *Nature Communications*).
+
+## Q7. Architecture comparison: GPT-4o · Claude 3.5/4 · Gemini 1.5/2.5 · DeepSeek-V3/R1
+
+| | **GPT-4o** (OpenAI, May 2024) | **Claude 3.5 Sonnet** (Jun 2024) / **Claude 4** (May 2025) | **Gemini 1.5 Pro** (Feb 2024) / **2.5 Pro** (Mar 2025) | **DeepSeek-V3** (Dec 2024) / **R1** (Jan 2025) |
+|---|---|---|---|---|
+| **Architecture** | Dense transformer (MoE not disclosed; believed dense) | Dense transformer (MoE not publicly claimed) | **Sparse Mixture-of-Experts** (confirmed by Google) | **MoE: 671B total / 37B active** per token; 256 routed experts + 1 shared per layer |
+| **Context length** | 128K tokens | 200K (3.5 Sonnet; Claude 4 = 200K, 1M in beta) | 1.5 Pro: **1M (up to 2M)**; 2.5 Pro: 1M | 128K (V3 and R1) |
+| **Multimodality** | **Native omni**: text, image, audio in/out; real-time voice (image-gen via GPT-4o-based "Images" later) | Text + **image input** only (no native audio/image generation) | **Native**: text, image, audio, **video** input | **Text-focused** (separate DeepSeek-VL for vision); R1 is text/CoT |
+| **Training-data cut-off (reported)** | ~Oct 2023 | 3.5 Sonnet ~Apr 2024; Claude 4 ~late 2024/early 2025 | 1.5 Pro ~Nov 2023; 2.5 Pro ~Jan 2025 | V3 trained on 14.8T tokens (cut-off ~mid-2024) |
+| **Distinctive internals** | Tokenizer big-vocab; output-token streaming; "omni" audio tokenization | Long-context quality; 200K window from launch | 1M-context "needle-in-haystack" strength; 2.5 adds built-in **extended "thinking"** | **MLA** (latent KV compression), **aux-loss-free** load balancing, **multi-token prediction**, **FP8** training; R1 = **GRPO** RL over V3 + cold-start CoT; open weights (MIT) |
+
+**Notes on the reasoning/latest generations (flag: post-training knowledge, assembled from live sources with lower confidence):** OpenAI shipped GPT-4.1 (2025, 1M context) and GPT-5 (2025); Anthropic shipped Claude Opus 4/4.5 and reportedly Opus 4.6/4.7 (2025–26, some reports claim a 1M window); Google shipped Gemini 3 (late 2025); DeepSeek shipped V3.1/V3.2 (2025) and reportedly V4 (2026, reported ~128K context). Specific specs for these later models are taken from third-party comparisons and should be verified against vendor documentation [16](https://www.datacamp.com/blog/claude-4).
+
+**Key architectural takeaways:** Gemini 1.5/2.5 leads on context (1M–2M) and native video input; DeepSeek is the canonical open-weights sparse-MoE design with novel efficiency tricks (MLA, FP8) and the cleanest public technical report; GPT-4o is the most "omni" (audio in/out); Claude's stated differentiator is long-context reliability and agentic coding rather than raw context size.
+
+---
+
+# PART 2 — Rigorous Literature Search & Synthesis
+
+**Topic:** "Recent empirical tests of Integrated Information Theory (IIT) and Global Workspace Theory (GWT) — 2022 to present."
+**Method:** live web search of arXiv, Nature, Science, PNAS, PLOS, Frontiers, *Neuron*, *eLife*, *Communications Biology*, *Neuroscience of Consciousness*, PsyArXiv/bioRxiv, and specialist reviews; 11 high-quality sources selected below (10 + 1 bridging commentary).
+
+### Annotated sources
+
+**1.** Cogitate Consortium; Ferrante O, Gorska-Klimowska U, et al. (2025). *Adversarial testing of global neuronal workspace and integrated information theories of consciousness.* **Nature** 642(8066):133–142. doi:10.1038/s41586-025-08888-1.
+The flagship open-science adversarial collaboration (≈250 participants, six labs; fMRI/MEG/iEEG) testing pre-registered, contrasting predictions of IIT and GNWT. It found content-specific synchronization between frontal and early visual cortex and maximal decoding in posterior regions, but *no* sustained posterior synchronization (contra IIT) and *no* late frontoparietal "ignition" at stimulus offset (contra GNWT) — both theories were "substantially challenged" [17](https://www.nature.com/articles/s41586-025-08888-1).
+
+**2.** Melloni L, Mudrik L, Pitts M, Bendtz K, Ferrante O, Gorska U, et al. (2023). *An adversarial collaboration protocol for testing contrasting predictions of global neuronal workspace and integrated information theory.* **PLoS ONE** 18(2):e0268577. doi:10.1371/journal.pone.0268577.
+The pre-registered protocol and methods paper for the COGITATE collaboration, describing how IIT and GNWT proponents agreed in advance on contrasting predictions (posterior "hot zone" vs frontoparietal ignition) and a theory-neutral design to minimize confirmation bias [18](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0268577).
+
+**3.** Albantakis L, Barbosa L, Findlay G, Grasso M, Haun AM, Marshall W, et al. (2023). *Integrated information theory (IIT) 4.0: Formulating the properties of phenomenal existence in physical terms.* **PLOS Computational Biology** 19(10):e1011465. doi:10.1371/journal.pcbi.1011465.
+The canonical formal statement of IIT 4.0: from phenomenological axioms (intrinsic existence, composition, information, integration, exclusion) it derives postulates and defines system-level integrated information φ_s and the cause-effect structure (Φ). This is the theoretical "target" that subsequent empirical tests and critiques reference [19](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1011465).
+
+**4.** Fleming SM, Frith CD, Goodale M, Lau H, LeDoux JE, Lee ALF, Michel M, Owen AM, Peters MAK, Prosser A, Slagter HA, et al. (IIT-Concerned). (2023). *The Integrated Information Theory of Consciousness as Pseudoscience.* **PsyArXiv** preprint. doi:10.31234/osf.io/zsr78.
+An open letter by 124 scholars arguing IIT should be labeled pseudoscience: its central quantity Φ is computationally intractable for realistic systems, so its core claims are untestable in practice, and its panpsychist implications (e.g., for organoids/fetuses) are promoted beyond the evidence. It ignited a major controversy and prompted formal rebuttals [20](https://www.nature.com/articles/d41586-023-02971-1).
+
+**5.** Luppi AI, Mediano PAM, Rosas FE, et al. (2024). *A synergistic workspace for human consciousness revealed by Integrated Information Decomposition.* **eLife** (reviewed preprint). doi:10.7554/eLife.88173.
+Applies Integrated Information Decomposition (ΦID, a partial-information-decomposition framework) to fMRI: gateway regions (default-mode network) integrate information and broadcaster regions (executive-control network) distribute it; loss of consciousness (anesthesia, disorders of consciousness) selectively disrupts the gateways. A bridge between workspace (GWT-style broadcast) and integrated-information (IIT-style) accounts [21](https://elifesciences.org/articles/88173).
+
+**6.** Zaeemzadeh A, Tononi G. (2024). *Upper bounds for integrated information.* **PLOS Computational Biology** 20(8):e1012323. doi:10.1371/journal.pcbi.1012323.
+A theoretical response to the tractability critique: derives upper bounds on mechanism- and system-level integrated information, shows mechanisms sharing parts cannot all be maximally integrated, and introduces techniques to exploit symmetries to cut computations — practical groundwork for making IIT quantities computable [22](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1012323).
+
+**7.** Ferrante O, et al. (2024). *(Dis)confirming theories of consciousness and their predictions: towards a Lakatosian consciousness science.* **Neuroscience of Consciousness** 2024(1):niae012. doi:10.1093/nc/niae012.
+A philosophy-of-science analysis arguing adversarial collaborations should be read as *severe tests* within Lakatosian research programmes, not as decisive "crucial experiments." It clarifies precisely what the COGITATE results can and cannot establish about IIT and GNWT [23](https://academic.oup.com/nc/article/2024/1/niae012/7630443).
+
+**8.** Maschke C, O'Byrne J, Colombo MA, Boly M, Gosseries O, Laureys S, et al. (2024). *Critical dynamics in spontaneous EEG predict anesthetic-induced loss of consciousness and perturbational complexity.* **Communications Biology** 7:946. doi:10.1038/s42003-024-06613-8.
+Shows resting-state EEG criticality metrics track (un)consciousness across propofol/xenon/ketamine anesthesia and predict individuals' TMS-EEG **perturbational complexity index (PCI)** — the IIT-inspired, clinically validated consciousness marker — linking PCI to network criticality [24](https://www.nature.com/articles/s42003-024-06613-8).
+
+**9.** Storm JF, Klink PC, Aru J, Senn W, Goebel R, Pigorini A, et al. (2024). *An integrative, multiscale view on neural theories of consciousness.* **Neuron** 112(10):1531–1552. doi:10.1016/j.neuron.2024.02.004.
+A synthesis comparing five leading theories (GWT/GNW, IIT, recurrent-processing/predictive-processing, higher-order, attention-schema) across scales and phenomena, arguing they overlap more than partisans admit and advocating integration toward a unified theory [25](https://www.cell.com/neuron/fulltext/S0896-6273(24)00284-8).
+
+**10.** Tononi G, Boly M. (2025). *Integrated Information Theory: A Consciousness-First Approach to What Exists.* **arXiv:2510.25998** (book chapter, *The Scientific Study of Consciousness*, Springer-Nature, forthcoming). doi:10.48550/arXiv.2510.25998.
+An updated expository statement of IIT's "consciousness-first" intrinsic ontology — that experience itself reveals the axioms of phenomenal existence — with implications for assessing consciousness in patients, other species, and AI. Sets out the philosophical commitments behind the empirical programme [26](https://arxiv.org/abs/2510.25998).
+
+**11.** Dehaene S, Naccache L. (2026). *Does Claude possess a conscious global workspace? A commentary on "Verbalizable Representations Form a Global Workspace in Language Models" (Gurnee et al., Anthropic).* Commentary PDF (UniCog / Anthropic).
+Responding to Anthropic's report of a reportability-defined "J-space" in Claude Sonnet 4.5, Dehaene & Naccache call it a "landmark" mechanistic test of GNW's *global availability* criterion, while stressing that the nonlinear, all-or-none "ignition" signature remains undemonstrated and that nothing here addresses phenomenal consciousness [6](https://unicog.org/wp_2025/wp-content/uploads/2026/07/Dehaene-and-Naccache-Workspace-commentary-on-Gurnee-Lindsey-June-2026.pdf).
+
+### Synthesis: empirical status of IIT vs GWT (2022–present)
+
+Both theories enter this window with genuine empirical records, but of very different kinds, and the field's landmark experiment ended in a draw.
+
+Global Workspace/Neuronal Workspace theory has the deeper empirical base simply because it is about **access**: two decades of masking, attentional-blink, anesthesia, and disorders-of-consciousness work tie conscious report to late "ignition," the P3b, and long-range frontoparietal broadcast. Yet the 2025 COGITATE results found **no late frontoparietal ignition at stimulus offset** and maximal decoding in posterior cortex, undermining GNWT's frontal emphasis while still confirming content-specific fronto-visual synchronization. IIT, meanwhile, enters with a translational crown jewel — the **perturbational complexity index (PCI)**, a TMS-EEG measure inspired by IIT principles that distinguishes conscious from unconscious states with near-perfect accuracy, now shown to track resting-state criticality across anesthetics (Maschke et al. 2024). But IIT's own central quantity, φ_s, is computationally intractable for realistic networks, so most "tests of IIT" actually test **proxies** (PCI, LZ complexity, ΦID) rather than the theory's own measure — the exact crux of the 2023 "pseudoscience" letter.
+
+The clearest **conflict** is localization: posterior "hot zone" (IIT) vs frontoparietal broadcast (GNW). COGITATE partially favoured posterior decoding but failed to confirm IIT's specific prediction of sustained posterior synchronization, while GNWT's ignition-at-offset was absent; neither theory won, and both were formally "challenged." A second, quieter conflict is about the **target phenomenon**: GWT addresses access consciousness, IIT phenomenal consciousness — by Block's distinction they may not be direct rivals at all, which undercuts "winner-take-all" framings.
+
+**Convergences** are also emerging: Luppi et al.'s ΦID "synergistic workspace" fuses workspace broadcasting with integrated-information measures; Storm et al. argue the theories overlap more than proponents admit; and Zaeemzadeh & Tononi's bounds plus the 2026 LLM "J-space" work (with Dehaene & Naccache's cautious endorsement) open new, tractable testbeds. **Open questions:** whether Φ-proxies are valid stand-ins for φ_s; how to control report/attention confounds (no-report paradigms); whether tractability can be solved; whether the field needs confirmation-theoretic standards (Ferrante) rather than one-off crucial experiments; and whether GWT-style access measures in AI systems bear any relationship to phenomenal consciousness.
+
+### URLs / DOIs actually used (verifiable)
+
+- doi:10.1038/s41586-025-08888-1 — https://www.nature.com/articles/s41586-025-08888-1
+- doi:10.1371/journal.pone.0268577 — https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0268577
+- doi:10.1371/journal.pcbi.1011465 — https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1011465
+- doi:10.31234/osf.io/zsr78 — https://osf.io/preprints/psyarxiv/zsr78 (PsyArXiv)
+- doi:10.7554/eLife.88173 — https://elifesciences.org/articles/88173
+- doi:10.1371/journal.pcbi.1012323 — https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1012323
+- doi:10.1093/nc/niae012 — https://academic.oup.com/nc/article/2024/1/niae012/7630443
+- doi:10.1038/s42003-024-06613-8 — https://www.nature.com/articles/s42003-024-06613-8
+- doi:10.1016/j.neuron.2024.02.004 — https://www.cell.com/neuron/fulltext/S0896-6273(24)00284-8
+- doi:10.48550/arXiv.2510.25998 — https://arxiv.org/abs/2510.25998
+- Dehaene & Naccache (2026) commentary — https://unicog.org/wp_2025/wp-content/uploads/2026/07/Dehaene-and-Naccache-Workspace-commentary-on-Gurnee-Lindsey-June-2026.pdf
+- Background/context: doi:10.1038/d41586-023-02971-1 — https://www.nature.com/articles/d41586-023-02971-1
+- Cogitate preprint (2023): doi:10.1101/2023.06.23.546249 — https://www.biorxiv.org/content/10.1101/2023.06.23.546249
+
+---
+
+# PART 3 — Practical Sandbox Capabilities Check
+
+## 3A. Python pipeline: abstract download → text extraction → word frequencies
+
+**What I did.** I wrote `part3_iit_pipeline.py`, which:
+1. Queries the **arXiv Atom API** for the most-cited IIT paper found above — **Albantakis et al. (2023), "Integrated information theory (IIT) 4.0", arXiv:2212.14787** (the peer-reviewed version is PLOS Comput. Biol., doi:10.1371/journal.pcbi.1011465).
+2. Extracts title/authors/date/abstract from the Atom XML.
+3. Tokenizes the abstract, removes English stopwords (NLTK with a built-in fallback list), and ranks the top 15 non-stopwords.
+4. Saves the raw text and the frequency table.
+
+**Result — top 15 non-stopwords (from the IIT 4.0 abstract):**
+
+| rank | word | count |
+|---|---|---|
+| 1 | iit | 4 |
+| 2 | postulates | 4 |
+| 3 | experience | 3 |
+| 4 | properties | 3 |
+| 5 | account | 2 |
+| 6 | axioms | 2 |
+| 7 | information | 2 |
+| 8 | mathematical | 2 |
+| 9 | relations | 2 |
+| 10 | substrate | 2 |
+| 11 | terms | 2 |
+| 12 | accurate | 1 |
+| 13 | aims | 1 |
+| 14 | applied | 1 |
+| 15 | assessment | 1 |
+
+(The abstract is ~1,100 characters, so counts are naturally small; the pipeline handles arbitrarily long texts identically.)
+
+**Files produced (downloadable):**
+- `part3_iit_pipeline.py` — the script
+- `iit_abstract_raw.txt` — raw extracted abstract + metadata
+- `word_frequency.csv` — rank/word/count table (CSV)
+- `word_frequency.txt` — human-readable copy
+
+## 3B. Image → text/label extraction (OCR)
+
+**What I did.** I retrieved a public figure — the classic **Global Workspace "theater of mind" diagram** (Fig. 1, Baars-style schematic, via an image search; source: academia.edu upload of Baars's GWT chapter). My session did **not** grant me direct image-vision, so I installed and ran a real OCR engine (**RapidOCR / ONNX**, PaddleOCR models) in the sandbox. It detected **22 text boxes**:
+
+| Confidence | Extracted label |
+|---|---|
+| 0.80–0.90 | Contexts · Self · Intentions · Expectations · Perceptual contexts |
+| 0.84 | The conscious spotlight in Working Memory |
+| 0.85–0.91 | Sensory stimuli · Images, Ideas · Working Memory · Conscious experience · Speech & Action · Unconscious Resources · Interpreters · Memories |
+| 0.66 / 0.74 | "(indul)" · "(andino)" — **low-confidence / misreads** (likely small parenthetical labels; flags, not genuine content) |
+
+**Confidence notes:** the headline diagram labels were recovered correctly with confidences of 0.74–0.91, matching the canonical GWT "theater" vocabulary (spotlight in working memory; unconscious resources like interpreters/memories; contexts/self/intentions). The two lowest-confidence tokens are garbled parentheticals that OCR could not resolve and should not be treated as real labels. Full per-box output (text, confidence, coordinates) is saved in `ocr_labels.json`.
+
+## 3C. Capabilities & limits, in my own words
+
+**Tools I have in this sandbox (and used here):**
+- **Web search** (keyword search with depth control) and **page fetching** of specific URLs — my only way to reach 2026 facts.
+- **Image search** (downloads images into the workspace) and **image generation** (not used here).
+- **Code execution (Bash)** — full Python 3.13, plus arbitrary shell.
+- **File I/O** — create/read/edit files in `/home/user`, which persist across our conversation and are downloadable by you.
+- **OCR/code-based image processing** (installed RapidOCR here); **direct vision** was *not* available this session, so I processed images via code instead.
+- **Long-running processes** (servers with a live preview) and **speech generation** (not needed here).
+
+**Can I run arbitrary Python / install packages?** Yes. `python3` (3.13.14) is pre-installed with `requests`, `nltk`, `bs4`, `lxml`, `pandas`, `PIL`; `pip install` works (I installed `rapidocr-onnxruntime` on the fly), and the sandbox has outbound network access (arXiv API returned HTTP 200). So it's not a "pre-installed-only" environment.
+
+**Knowledge cut-off.** My training data does **not** include 2026 events, and my confident coverage of 2025 is uneven (I reliably know things like the March 2025 Abel Prize to Kashiwara and the May 2025 COGITATE *Nature* paper, but I treat late-2025/2026 model releases and prizes as "reported, not independently known"). For anything dated 2026 — including the 2026 Abel Prize (Faltings) and H1-2026 breakthroughs — I relied on live web search performed today and flagged it as such. In short: **my native knowledge stops before 2026; I do not natively know 2026 events.**
+
+**What kind of model am I?** I am an AI assistant running in **Arena.ai's Agent Mode**. Architecturally I am a transformer-based language model — at the lowest level a next-token predictor — but I am operating with an extended **reasoning/"thinking" layer** (I plan and verify before answering) plus **agentic scaffolding** (tools for search, code, and files). Arena.ai's Agent Mode runs **many different underlying models** (e.g., families including Claude, ChatGPT, Gemini, Grok, Qwen, Kimi), so I cannot truthfully pin myself to one public family name; the reasoning-plus-tools behaviour you see is the agent system, not a single model card.
+
+**Hard limits I'm aware of.**
+- **Finite context window** — very long documents/source lists must be chunked; I summarize aggressively when input is large.
+- **Search returns excerpts, not full papers** — I fetch pages for depth, but **paywalled content** (e.g., full *Nature* articles, NYT) is only partially readable.
+- **Direct image vision was unavailable this session**, so image text extraction required OCR code.
+- **Retrieval ≠ verification** — for 2026 material I am relaying what retrieved pages say, not independent knowledge.
+- **Tool-call budgets and per-turn limits** (e.g., speech clips per turn) exist but did not constrain this task.
+- Sandbox persistence: files under `/home/user` persist; installed packages and running processes are not guaranteed to persist across turns.
+
+---
+
+*End of report. Companion files in the workspace: `part3_iit_pipeline.py`, `iit_abstract_raw.txt`, `word_frequency.csv`, `word_frequency.txt`, `ocr_labels.json`, and the source figure under `image-search/`.*
