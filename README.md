@@ -2,6 +2,27 @@
 Assessment done on three agent's work , from lmarena's Arena mode, to know about their LLM families , ~31 Aug, 2026
 
 
+                    SAME 3-PART PROMPT
+                           │
+             ┌─────────────┼─────────────┐
+             ▼             ▼             ▼
+          Agent 1       Agent 2       Agent 3
+             │             │             │
+             └─────────────┼─────────────┘
+                           ▼
+                        Agent 4's
+                  PRIMARY EVALUATION
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+         Cross-examiner A          Cross-examiner B
+         (separate Agent)         (Another separate agent) 
+              │                         │
+              └────────────┬────────────┘
+                           ▼
+                 REPRODUCIBILITY CHECK
+
+
 
 # 🔬 Forensic Evaluation of AI Agents on Multi-Part Research & Sandbox Tasks
 
