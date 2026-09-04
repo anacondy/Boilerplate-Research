@@ -1,3 +1,6 @@
+Substack Article >>>
+https://corruptor.substack.com/p/why-fluency-deceives-and-stylometry?r=2dtgx7&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true
+
 # Boilerplate-Research
 Assessment done on three agent's work , from lmarena's Arena mode, to know about their LLM families , ~31 Aug, 2026
 
@@ -23,6 +26,7 @@ Assessment done on three agent's work , from lmarena's Arena mode, to know about
                  REPRODUCIBILITY CHECK
 
 
+Demo >>> https://anacondy.github.io/Boilerplate-Research/
 
 # 🔬 Forensic Evaluation of AI Agents on Multi-Part Research & Sandbox Tasks
 
